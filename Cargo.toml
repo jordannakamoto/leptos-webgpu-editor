@@ -1,0 +1,15 @@
+[package]
+name = "leptos-webgpu-editor"
+version = "0.1.0"
+edition = "2024"
+
+[profile.dev]
+opt-level = 0          # no optimizations
+debug = true           # full debug info
+incremental = true     # enable incremental builds
+codegen-units = 16     # more parallel codegen
+overflow-checks = false
+
+[dependencies]
+leptos = { version = "0.8.3", default-features = false, features = ["csr"] }
+web-sys = { version = "0.3", default-features = false, features = ["Window", "Document", "HtmlElement", "console"] }
