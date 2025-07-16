@@ -12,4 +12,21 @@ overflow-checks = false
 
 [dependencies]
 leptos = { version = "0.8.3", default-features = false, features = ["csr"] }
-web-sys = { version = "0.3", default-features = false, features = ["Window", "Document", "HtmlElement", "console"] }
+web-sys = { version = "0.3", default-features = false, features = [
+    "Window", "Document", "HtmlElement", "console", 
+    "HtmlCanvasElement", "CanvasRenderingContext2d",
+    "GpuAdapter", "GpuDevice", "GpuQueue", "GpuCommandEncoder", 
+    "GpuRenderPassEncoder", "GpuBuffer", "GpuTexture", "GpuTextureView",
+    "GpuRenderPipeline", "GpuShaderModule", "GpuCanvasContext",
+    "Navigator", "Gpu", "GpuRequestAdapterOptions", "GpuDeviceDescriptor",
+    "GpuBufferDescriptor", "GpuTextureDescriptor", "GpuShaderModuleDescriptor",
+    "GpuRenderPipelineDescriptor", "GpuColorTargetState", "GpuFragmentState",
+    "GpuVertexState", "GpuRenderPassDescriptor", "GpuRenderPassColorAttachment",
+    "GpuCommandBufferDescriptor", "GpuCanvasConfiguration", "GpuCanvasAlphaMode",
+    "GpuLoadOp", "GpuStoreOp", "GpuPrimitiveState", "Performance", "GpuTextureFormat",
+    "GpuCommandBuffer"
+] }
+getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
