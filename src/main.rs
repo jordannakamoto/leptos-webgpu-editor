@@ -3,6 +3,7 @@ use wasm_bindgen::prelude::*;
 use web_sys::{HtmlCanvasElement, HtmlElement};
 
 mod gpu;
+mod text_input;
 
 #[wasm_bindgen]
 extern "C" {
@@ -108,8 +109,9 @@ fn main() {
     leptos::mount::mount_to_body(|| {
         view! {
             <div>
-                <canvas id="webgpu-canvas" width="800" height="600" style="border: 1px solid black;"></canvas>
-                <div>
+                <h1>"WebGPU Text Editor"</h1>
+                <text_input::TextInput />
+                <div style="margin-top: 10px;">
                     <button on:click=move |_| {
                         wasm_bindgen_futures::spawn_local(async {
                             if let Err(e) = render_square().await {
@@ -118,15 +120,6 @@ fn main() {
                         });
                     }>
                         "Draw Square"
-                    </button>
-                    <button on:click=move |_| {
-                        wasm_bindgen_futures::spawn_local(async {
-                            if let Err(e) = render_text().await {
-                                console_log!("WebGPU text error: {:?}", e);
-                            }
-                        });
-                    }>
-                        "Draw Text"
                     </button>
                 </div>
             </div>
