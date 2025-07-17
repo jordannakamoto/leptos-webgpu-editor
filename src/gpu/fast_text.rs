@@ -55,6 +55,7 @@ pub struct FastTextRenderer {
     // Persistent buffers
     glyph_buffer: Option<GlyphInstanceBuffer>,
     position_buffer: Option<GpuBuffer>,
+    vertex_buffer: Option<GpuBuffer>,
     atlas_texture: Option<web_sys::GpuTexture>,
     bind_group: Option<web_sys::GpuBindGroup>,
     
@@ -97,6 +98,7 @@ impl FastTextRenderer {
             compute_pipeline: None,
             glyph_buffer: None,
             position_buffer: None,
+            vertex_buffer: None,
             atlas_texture: None,
             bind_group: None,
             font,
@@ -118,7 +120,7 @@ impl FastTextRenderer {
         
         // Create persistent vertex buffer (ring buffer style)
         let vertex_buffer_size = self.max_glyphs * 6 * 4 * 4; // 6 vertices * 4 floats * 4 bytes
-        let _vertex_buffer = self.device.create_buffer(&{
+        let vertex_buffer = self.device.create_buffer(&{
             let mut desc = web_sys::GpuBufferDescriptor::new(
                 vertex_buffer_size as f64,
                 web_sys::gpu_buffer_usage::VERTEX | web_sys::gpu_buffer_usage::COPY_DST,
@@ -126,7 +128,9 @@ impl FastTextRenderer {
             desc.set_label("Persistent Vertex Buffer");
             desc.set_mapped_at_creation(false);
             desc
-        });
+        })?;
+        
+        self.vertex_buffer = Some(vertex_buffer);
         
         // Create glyph instance buffer
         let instance_buffer_size = self.max_glyphs * 16; // 4 floats per instance
@@ -570,12 +574,9 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         let pipeline = self.render_pipeline.as_ref()
             .ok_or_else(|| JsValue::from_str("Render pipeline not created"))?;
         
-        // Create vertex buffer
-        let vertex_buffer_desc = web_sys::GpuBufferDescriptor::new(
-            (vertices.len() * 4) as f64,
-            web_sys::gpu_buffer_usage::VERTEX | web_sys::gpu_buffer_usage::COPY_DST,
-        );
-        let vertex_buffer = self.device.create_buffer(&vertex_buffer_desc)?;
+        // Use persistent vertex buffer
+        let vertex_buffer = self.vertex_buffer.as_ref()
+            .ok_or_else(|| JsValue::from_str("Persistent vertex buffer not initialized"))?;
         
         let vertex_bytes: Vec<u8> = vertices.iter()
             .flat_map(|&f| f.to_le_bytes())
@@ -583,7 +584,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         let vertex_data = unsafe {
             js_sys::Uint8Array::view(&vertex_bytes)
         };
-        self.device.queue().write_buffer_with_u32_and_u8_array(&vertex_buffer, 0, &vertex_data)?;
+        self.device.queue().write_buffer_with_u32_and_u8_array(vertex_buffer, 0, &vertex_data)?;
         
         // Create command encoder and render pass
         let command_encoder = self.device.create_command_encoder();
@@ -607,7 +608,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             render_pass.set_bind_group(0, Some(bind_group));
         }
         
-        render_pass.set_vertex_buffer(0, Some(&vertex_buffer));
+        render_pass.set_vertex_buffer(0, Some(vertex_buffer));
         render_pass.draw(vertex_count as u32);
         render_pass.end();
         
