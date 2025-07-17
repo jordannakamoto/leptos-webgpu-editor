@@ -179,7 +179,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         Ok(())
     }
 
-    fn generate_sdf_atlas(&mut self, text: &str) -> Result<(), JsValue> {
+    pub fn generate_sdf_atlas(&mut self, text: &str) -> Result<(), JsValue> {
         console_log!("Generating SDF atlas for: '{}'", text);
         
         let atlas_size = (self.atlas_width * self.atlas_height) as usize;
@@ -256,7 +256,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         Ok(())
     }
 
-    fn create_texture_and_bind_group(&mut self, device: &GpuDevice) -> Result<(), JsValue> {
+    pub fn create_texture_and_bind_group(&mut self, device: &GpuDevice) -> Result<(), JsValue> {
         if let Some(ref atlas_data) = self.sdf_atlas {
             let mut extent = web_sys::GpuExtent3dDict::new(self.atlas_width);
             extent.set_height(self.atlas_height);
@@ -370,7 +370,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
     pub fn render_text(
         &mut self,
         device: &GpuDevice,
-        view: &GpuTextureView,
+        context: &crate::gpu::context::GpuContext,
         text: &str,
         x: f32,
         y: f32,
@@ -414,12 +414,13 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
 
         let command_encoder = device.create_command_encoder();
         
+        // Render to offscreen texture first
         let color_attachments = js_sys::Array::new();
         let clear_color = web_sys::GpuColorDict::new(1.0, 1.0, 1.0, 1.0);
         let color_attachment = web_sys::GpuRenderPassColorAttachment::new(
             web_sys::GpuLoadOp::Clear,
             web_sys::GpuStoreOp::Store,
-            view
+            &context.offscreen_view
         );
         color_attachment.set_clear_value(&clear_color);
         color_attachments.push(&color_attachment);
@@ -436,6 +437,25 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         render_pass.set_vertex_buffer(0, Some(&vertex_buffer));
         render_pass.draw(vertex_count as u32);
         render_pass.end();
+        
+        // Copy from offscreen texture to swapchain
+        let swapchain_texture = context.context.get_current_texture()?;
+        command_encoder.copy_texture_to_texture(
+            &{
+                let source = web_sys::GpuTexelCopyTextureInfo::new(&context.offscreen_texture);
+                source
+            },
+            &{
+                let dest = web_sys::GpuTexelCopyTextureInfo::new(&swapchain_texture);
+                dest
+            },
+            &{
+                let mut copy_size = web_sys::GpuExtent3dDict::new(context.canvas.width());
+                copy_size.set_height(context.canvas.height());
+                copy_size.set_depth_or_array_layers(1);
+                copy_size
+            },
+        )?;
         
         device.queue().submit(&js_sys::Array::of1(&command_encoder.finish()));
         Ok(())

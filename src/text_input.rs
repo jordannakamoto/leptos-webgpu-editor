@@ -1,6 +1,9 @@
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::closure::Closure;
 use web_sys::{HtmlCanvasElement, HtmlElement, KeyboardEvent};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[wasm_bindgen]
 extern "C" {
@@ -17,14 +20,14 @@ pub fn TextInput() -> impl IntoView {
     let (text_content, set_text_content) = signal("Hello World".to_string());
     let (cursor_pos, set_cursor_pos) = signal(0_usize);
     
-    // Auto-render when text changes
+    // Synchronous rendering without async overhead
     Effect::new(move |_| {
         let text = text_content.get();
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = render_text_with_input(&text).await {
-                console_log!("WebGPU text error: {:?}", e);
-            }
-        });
+        
+        // Skip the async overhead - render synchronously
+        if let Err(e) = render_text_sync(&text) {
+            console_log!("WebGPU text error: {:?}", e);
+        }
     });
     
     view! {
@@ -33,7 +36,7 @@ pub fn TextInput() -> impl IntoView {
                 id="webgpu-canvas" 
                 width="800" 
                 height="600" 
-                style="border: 1px solid black; outline: none;" 
+                style="border: 1px solid black; outline: none; background-color: white;" 
                 tabindex="0"
                 on:keydown=move |ev: KeyboardEvent| {
                     ev.prevent_default();
@@ -86,44 +89,91 @@ pub fn TextInput() -> impl IntoView {
     }
 }
 
-async fn render_text_with_input(text: &str) -> Result<(), JsValue> {
-    console_log!("Rendering text: '{}'", text);
+// Global WebGPU resources cache
+struct WebGPUResources {
+    context: Option<crate::gpu::context::GpuContext>,
+    text_renderer: Option<crate::gpu::text::TextRenderer>,
+    is_initialized: bool,
+    is_rendering: bool,
+    first_render: bool,
+}
 
-    let window = web_sys::window().unwrap();
-    let document = window.document().unwrap();
-    let canvas: HtmlCanvasElement = document
-        .get_element_by_id("webgpu-canvas")
-        .unwrap()
-        .dyn_into::<HtmlCanvasElement>()
-        .unwrap();
+static mut WEBGPU_RESOURCES: Option<Rc<RefCell<WebGPUResources>>> = None;
 
-    let css_width = 800.0;
-    let css_height = 600.0;
-    let canvas_elem = canvas.unchecked_ref::<HtmlElement>();
-    canvas_elem.style().set_property("width", &format!("{}px", css_width))?;
-    canvas_elem.style().set_property("height", &format!("{}px", css_height))?;
+async fn get_or_init_webgpu_resources() -> Result<Rc<RefCell<WebGPUResources>>, JsValue> {
+    unsafe {
+        if let Some(resources) = &WEBGPU_RESOURCES {
+            return Ok(resources.clone());
+        }
+        
+        let resources = Rc::new(RefCell::new(WebGPUResources {
+            context: None,
+            text_renderer: None,
+            is_initialized: false,
+            is_rendering: false,
+            first_render: true,
+        }));
+        
+        // Initialize WebGPU context and text renderer once
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+        let canvas: HtmlCanvasElement = document
+            .get_element_by_id("webgpu-canvas")
+            .unwrap()
+            .dyn_into::<HtmlCanvasElement>()
+            .unwrap();
 
-    let dpr = window.device_pixel_ratio();
-    canvas.set_width((css_width * dpr) as u32);
-    canvas.set_height((css_height * dpr) as u32);
+        let css_width = 800.0;
+        let css_height = 600.0;
+        let canvas_elem = canvas.unchecked_ref::<HtmlElement>();
+        canvas_elem.style().set_property("width", &format!("{}px", css_width))?;
+        canvas_elem.style().set_property("height", &format!("{}px", css_height))?;
 
-    let context = crate::gpu::context::GpuContext::new(&canvas).await?;
-    let mut text_renderer = crate::gpu::text::TextRenderer::new()?;
-    text_renderer.create_text_pipeline(&context.device)?;
+        let dpr = window.device_pixel_ratio();
+        canvas.set_width((css_width * dpr) as u32);
+        canvas.set_height((css_height * dpr) as u32);
 
-    let view = context.get_current_texture_view()?;
-    let canvas_width = canvas.width() as f32;
-    let canvas_height = canvas.height() as f32;
-    
-    text_renderer.render_text(
-        &context.device,
-        &view,
-        text,
-        50.0,
-        100.0,
-        canvas_width,
-        canvas_height,
-    )?;
+        let context = crate::gpu::context::GpuContext::new(&canvas).await?;
+        let mut text_renderer = crate::gpu::text::TextRenderer::new()?;
+        text_renderer.create_text_pipeline(&context.device)?;
+        
+        // Pre-generate full character set for instant rendering
+        let full_charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`'\" \n\t";
+        text_renderer.generate_sdf_atlas(full_charset)?;
+        text_renderer.create_texture_and_bind_group(&context.device)?;
 
+        {
+            let mut res = resources.borrow_mut();
+            res.context = Some(context);
+            res.text_renderer = Some(text_renderer);
+            res.is_initialized = true;
+        }
+
+        WEBGPU_RESOURCES = Some(resources.clone());
+        Ok(resources)
+    }
+}
+
+fn render_text_sync(text: &str) -> Result<(), JsValue> {
+    unsafe {
+        if let Some(resources) = &WEBGPU_RESOURCES {
+            let mut res = resources.borrow_mut();
+            let context = res.context.as_ref().unwrap();
+            let text_renderer = res.text_renderer.as_mut().unwrap();
+            
+            let canvas_width = context.canvas.width() as f32;
+            let canvas_height = context.canvas.height() as f32;
+            
+            text_renderer.render_text(
+                &context.device,
+                context,
+                text,
+                50.0,
+                100.0,
+                canvas_width,
+                canvas_height,
+            )?;
+        }
+    }
     Ok(())
 }
