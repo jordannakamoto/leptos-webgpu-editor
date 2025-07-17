@@ -50,6 +50,7 @@ features = [
   "GpuTexelCopyBufferLayout",
   "GpuTexelCopyTextureInfo",
   "GpuSampler",
+  "GpuMipmapFilterMode",
   "GpuSamplerDescriptor",
   "GpuBindGroup",
   "GpuBindGroupDescriptor",

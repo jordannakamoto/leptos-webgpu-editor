@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
-use web_sys::HtmlCanvasElement;
+use web_sys::{HtmlCanvasElement, HtmlElement};
 
 mod gpu;
 
@@ -17,7 +17,7 @@ macro_rules! console_log {
 async fn render_square() -> Result<(), JsValue> {
     console_log!("Starting square render...");
     
-    // Get canvas
+    // Get canvas and set up DPI scaling
     let window = web_sys::window().unwrap();
     let document = window.document().unwrap();
     let canvas = document
@@ -25,6 +25,13 @@ async fn render_square() -> Result<(), JsValue> {
         .unwrap()
         .dyn_into::<HtmlCanvasElement>()
         .unwrap();
+    
+    // Apply DPI scaling
+    let dpr = window.device_pixel_ratio();
+    let display_width = canvas.client_width() as f64;
+    let display_height = canvas.client_height() as f64;
+    canvas.set_width((display_width * dpr) as u32);
+    canvas.set_height((display_height * dpr) as u32);
     
     // Initialize GPU context
     let context = gpu::context::GpuContext::new(&canvas).await?;
@@ -44,29 +51,55 @@ async fn render_square() -> Result<(), JsValue> {
 
 async fn render_text() -> Result<(), JsValue> {
     console_log!("Starting text render...");
-    
+
     // Get canvas
     let window = web_sys::window().unwrap();
     let document = window.document().unwrap();
-    let canvas = document
+    let canvas: HtmlCanvasElement = document
         .get_element_by_id("webgpu-canvas")
         .unwrap()
         .dyn_into::<HtmlCanvasElement>()
         .unwrap();
-    
-    // Initialize GPU context
+
+    // ✅ Set CSS size explicitly to prevent layout shift
+    let css_width = 800.0;
+    let css_height = 600.0;
+    let canvas_elem = canvas.unchecked_ref::<HtmlElement>();
+canvas_elem
+    .style()
+    .set_property("width", &format!("{}px", css_width))?;
+canvas_elem
+    .style()
+    .set_property("height", &format!("{}px", css_height))?;
+
+    // ✅ Set internal resolution with device pixel ratio
+    let dpr = window.device_pixel_ratio();
+    canvas.set_width((css_width * dpr) as u32);
+    canvas.set_height((css_height * dpr) as u32);
+
+    // Initialize WebGPU context
     let context = gpu::context::GpuContext::new(&canvas).await?;
-    
-    // Create text renderer
+
+    // Create text renderer and pipeline
     let mut text_renderer = gpu::text::TextRenderer::new()?;
     text_renderer.create_text_pipeline(&context.device)?;
-    
+
     // Get current texture view
     let view = context.get_current_texture_view()?;
-    
-    // Render text
-    text_renderer.render_text(&context.device, &view, "Hello World", 0.0, 0.0)?;
-    
+
+    // ✅ Pass actual canvas dimensions (in pixels) to renderer
+    let canvas_width = canvas.width() as f32;
+    let canvas_height = canvas.height() as f32;
+    text_renderer.render_text(
+        &context.device,
+        &view,
+        "Hello World",
+        100.0,
+        100.0,
+        canvas_width,
+        canvas_height,
+    )?;
+
     console_log!("Text rendered successfully!");
     Ok(())
 }
@@ -75,7 +108,6 @@ fn main() {
     leptos::mount::mount_to_body(|| {
         view! {
             <div>
-                <h1>"WebGPU Renderer"</h1>
                 <canvas id="webgpu-canvas" width="800" height="600" style="border: 1px solid black;"></canvas>
                 <div>
                     <button on:click=move |_| {
