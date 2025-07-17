@@ -205,7 +205,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             let char_x = (i as u32 % chars_per_row) * char_size;
             let char_y = (i as u32 / chars_per_row) * char_size;
             
-            let (metrics, bitmap) = self.font.rasterize(ch, 48.0);
+            let (metrics, bitmap) = self.font.rasterize(ch, 12.0);
             
             if !bitmap.is_empty() && metrics.width > 0 && metrics.height > 0 {
                 // Generate SDF
@@ -217,7 +217,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
                     }
                 };
                 
-                let sdf_radius = 8.0;
+                let sdf_radius = 4.0;
                 let sdf_data = bitmap_glyph.render_sdf(sdf_radius as usize);
                 
                 let sdf_width = metrics.width + 2 * self.buffer_size;
@@ -327,7 +327,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         layout_settings.x = x;
         layout_settings.y = y;
         layout.reset(&layout_settings);
-        layout.append(fonts, &TextStyle::new(text, 48.0, 0));
+        layout.append(fonts, &TextStyle::new(text, 12.0, 0));
     
         let mut vertices = Vec::new();
         

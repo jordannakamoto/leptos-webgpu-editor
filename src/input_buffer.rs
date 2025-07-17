@@ -1,9 +1,6 @@
 use wasm_bindgen::prelude::*;
 
-// Shared memory buffer for zero-copy input transfer
-static mut INPUT_BUFFER: [u8; 1024] = [0; 1024];
-static mut CURSOR_POSITION: usize = 0;
-static mut TEXT_LENGTH: usize = 0;
+// Simplified input buffer - operations are sent directly to GPU renderer
 
 #[wasm_bindgen]
 extern "C" {
@@ -15,142 +12,151 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
-#[wasm_bindgen]
-pub fn get_input_buffer_ptr() -> *mut u8 {
-    unsafe { 
-        std::ptr::addr_of_mut!(INPUT_BUFFER) as *mut u8
-    }
-}
-
-#[wasm_bindgen]
-pub fn get_cursor_position() -> usize {
-    unsafe { CURSOR_POSITION }
-}
-
-#[wasm_bindgen]
-pub fn set_cursor_position(pos: usize) {
-    unsafe { CURSOR_POSITION = pos }
-}
-
-#[wasm_bindgen]
-pub fn get_text_length() -> usize {
-    unsafe { TEXT_LENGTH }
-}
-
-#[wasm_bindgen]
-pub fn commit_input(length: usize, cursor_pos: usize) {
-    unsafe {
-        TEXT_LENGTH = length;
-        CURSOR_POSITION = cursor_pos;
-        
-        // Convert to UTF-8 string
-        let text_bytes = &INPUT_BUFFER[..length];
-        if let Ok(text) = std::str::from_utf8(text_bytes) {
-            // Trigger render with new text
-            if let Err(e) = crate::fast_text_input::render_from_buffer(text, cursor_pos) {
-                console_log!("Render error: {:?}", e);
-            }
-        }
-    }
-}
-
-#[wasm_bindgen]
-pub fn get_current_text() -> String {
-    unsafe {
-        let text_bytes = &INPUT_BUFFER[..TEXT_LENGTH];
-        std::str::from_utf8(text_bytes).unwrap_or("").to_string()
-    }
+async fn get_renderer() -> Result<std::rc::Rc<std::cell::RefCell<crate::text_input::WebGPUResources>>, JsValue> {
+    crate::text_input::get_or_init_webgpu_resources().await
 }
 
 // High-performance input operations
 #[wasm_bindgen]
 pub fn insert_char_at_cursor(char_code: u32) {
-    unsafe {
-        if let Some(ch) = char::from_u32(char_code) {
-            let mut text = get_current_text();
-            console_log!("insert_char_at_cursor: '{}' into '{}' at position {}", ch, text, CURSOR_POSITION as usize);
-            if CURSOR_POSITION <= text.len() {
-                text.insert(CURSOR_POSITION, ch);
-                console_log!("Result text: '{}'", text);
-                
-                // Write back to buffer
-                let bytes = text.as_bytes();
-                if bytes.len() <= 1024 {
-                    INPUT_BUFFER[..bytes.len()].copy_from_slice(bytes);
-                    TEXT_LENGTH = bytes.len();
-                    CURSOR_POSITION += ch.len_utf8();
-                    
-                    // Trigger render with updated text
-                    if let Err(e) = crate::fast_text_input::render_from_buffer(&text, CURSOR_POSITION) {
-                        console_log!("Render error: {:?}", e);
+    if let Some(ch) = char::from_u32(char_code) {
+        console_log!("insert_char_at_cursor: '{}'", ch);
+        
+        wasm_bindgen_futures::spawn_local(async move {
+            match get_renderer().await {
+                Ok(resources) => {
+                    let mut borrowed = resources.borrow_mut();
+                    if let Some(renderer) = borrowed.fast_text_renderer.as_mut() {
+                        if let Err(e) = renderer.insert_char(ch) {
+                            console_log!("Error inserting char: {:?}", e);
+                        } else {
+                            // Trigger render with updated text
+                            let text = renderer.get_text();
+                            let cursor_pos = renderer.get_cursor_position();
+                            drop(borrowed); // Drop the borrow before calling render_from_buffer
+                            if let Err(e) = crate::fast_text_input::render_from_buffer(&text, cursor_pos) {
+                                console_log!("Render error: {:?}", e);
+                            }
+                        }
+                    } else {
+                        console_log!("Fast text renderer not initialized");
                     }
                 }
+                Err(e) => console_log!("Failed to get renderer: {:?}", e),
             }
-        }
+        });
     }
 }
 
 #[wasm_bindgen]
 pub fn delete_char_at_cursor() {
-    unsafe {
-        let mut text = get_current_text();
-        console_log!("delete_char_at_cursor: '{}' at position {}", text, CURSOR_POSITION as usize);
-        if CURSOR_POSITION > 0 && CURSOR_POSITION <= text.len() {
-            // Find the previous character boundary
-            let mut char_start = CURSOR_POSITION;
-            while char_start > 0 && !text.is_char_boundary(char_start) {
-                char_start -= 1;
-            }
-            
-            if char_start > 0 {
-                char_start -= 1;
-                while char_start > 0 && !text.is_char_boundary(char_start) {
-                    char_start -= 1;
-                }
-                
-                text.remove(char_start);
-                
-                // Write back to buffer
-                let bytes = text.as_bytes();
-                if bytes.len() <= 1024 {
-                    INPUT_BUFFER[..bytes.len()].copy_from_slice(bytes);
-                    TEXT_LENGTH = bytes.len();
-                    CURSOR_POSITION = char_start;
-                    
-                    // Trigger render with updated text
-                    if let Err(e) = crate::fast_text_input::render_from_buffer(&text, CURSOR_POSITION) {
-                        console_log!("Render error: {:?}", e);
+    console_log!("delete_char_at_cursor");
+    
+    wasm_bindgen_futures::spawn_local(async move {
+        match get_renderer().await {
+            Ok(resources) => {
+                let mut borrowed = resources.borrow_mut();
+                if let Some(renderer) = borrowed.fast_text_renderer.as_mut() {
+                    if let Err(e) = renderer.delete_char_before_cursor() {
+                        console_log!("Error deleting char: {:?}", e);
+                    } else {
+                        // Trigger render with updated text
+                        let text = renderer.get_text();
+                        let cursor_pos = renderer.get_cursor_position();
+                        drop(borrowed); // Drop the borrow before calling render_from_buffer
+                        if let Err(e) = crate::fast_text_input::render_from_buffer(&text, cursor_pos) {
+                            console_log!("Render error: {:?}", e);
+                        }
                     }
+                } else {
+                    console_log!("Fast text renderer not initialized");
                 }
             }
+            Err(e) => console_log!("Failed to get renderer: {:?}", e),
         }
-    }
+    });
 }
 
 #[wasm_bindgen]
 pub fn move_cursor_left() {
-    unsafe {
-        if CURSOR_POSITION > 0 {
-            let text = get_current_text();
-            let mut new_pos = CURSOR_POSITION - 1;
-            while new_pos > 0 && !text.is_char_boundary(new_pos) {
-                new_pos -= 1;
+    console_log!("move_cursor_left");
+    
+    wasm_bindgen_futures::spawn_local(async move {
+        match get_renderer().await {
+            Ok(resources) => {
+                let mut borrowed = resources.borrow_mut();
+                if let Some(renderer) = borrowed.fast_text_renderer.as_mut() {
+                    renderer.move_cursor_left();
+                    // Trigger render with updated cursor position
+                    let text = renderer.get_text();
+                    let cursor_pos = renderer.get_cursor_position();
+                    drop(borrowed); // Drop the borrow before calling render_from_buffer
+                    if let Err(e) = crate::fast_text_input::render_from_buffer(&text, cursor_pos) {
+                        console_log!("Render error: {:?}", e);
+                    }
+                } else {
+                    console_log!("Fast text renderer not initialized");
+                }
             }
-            CURSOR_POSITION = new_pos;
+            Err(e) => console_log!("Failed to get renderer: {:?}", e),
         }
-    }
+    });
 }
 
 #[wasm_bindgen]
 pub fn move_cursor_right() {
-    unsafe {
-        let text = get_current_text();
-        if CURSOR_POSITION < text.len() {
-            let mut new_pos = CURSOR_POSITION + 1;
-            while new_pos < text.len() && !text.is_char_boundary(new_pos) {
-                new_pos += 1;
+    console_log!("move_cursor_right");
+    
+    wasm_bindgen_futures::spawn_local(async move {
+        match get_renderer().await {
+            Ok(resources) => {
+                let mut borrowed = resources.borrow_mut();
+                if let Some(renderer) = borrowed.fast_text_renderer.as_mut() {
+                    renderer.move_cursor_right();
+                    // Trigger render with updated cursor position
+                    let text = renderer.get_text();
+                    let cursor_pos = renderer.get_cursor_position();
+                    drop(borrowed); // Drop the borrow before calling render_from_buffer
+                    if let Err(e) = crate::fast_text_input::render_from_buffer(&text, cursor_pos) {
+                        console_log!("Render error: {:?}", e);
+                    }
+                } else {
+                    console_log!("Fast text renderer not initialized");
+                }
             }
-            CURSOR_POSITION = new_pos;
+            Err(e) => console_log!("Failed to get renderer: {:?}", e),
+        }
+    });
+}
+// Legacy compatibility functions for fast_text_input.rs
+static mut TEMP_BUFFER: [u8; 1024] = [0; 1024];
+
+pub fn get_input_buffer_ptr() -> *mut u8 {
+    unsafe { std::ptr::addr_of_mut!(TEMP_BUFFER).cast::<u8>() }
+}
+
+pub fn commit_input(length: usize, _cursor_pos: usize) {
+    unsafe {
+        let text_bytes = &TEMP_BUFFER[..length];
+        if let Ok(text) = std::str::from_utf8(text_bytes) {
+            // Set the text in the GPU renderer
+            wasm_bindgen_futures::spawn_local(async move {
+                match get_renderer().await {
+                    Ok(resources) => {
+                        let mut borrowed = resources.borrow_mut();
+                        if let Some(renderer) = borrowed.fast_text_renderer.as_mut() {
+                            renderer.set_text(text);
+                            let text = renderer.get_text();
+                            let cursor_pos = renderer.get_cursor_position();
+                            drop(borrowed);
+                            if let Err(e) = crate::fast_text_input::render_from_buffer(&text, cursor_pos) {
+                                console_log!("Render error: {:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => console_log!("Failed to get renderer: {:?}", e),
+                }
+            });
         }
     }
 }

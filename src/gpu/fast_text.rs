@@ -68,6 +68,10 @@ pub struct FastTextRenderer {
     dirty_regions: Vec<DirtyRegion>,
     last_text: String,
     
+    // Text state management
+    text_buffer: Vec<char>,
+    cursor_position: usize,
+    
     // Configuration
     max_glyphs: usize,
     atlas_size: u32,
@@ -101,9 +105,11 @@ impl FastTextRenderer {
             cached_commands: HashMap::new(),
             dirty_regions: Vec::new(),
             last_text: String::new(),
+            text_buffer: Vec::new(),
+            cursor_position: 0,
             max_glyphs,
             atlas_size: 1024, // Larger atlas for better performance
-            buffer_size: 8,
+            buffer_size: 4,
         })
     }
     
@@ -272,7 +278,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
     
     // For very small text, we need a bit more smoothing
     // For large text, we want it sharper
-    width = clamp(width * 0.7, 0.0001, 0.5);
+    width = clamp(width * 1.2, 0.001, 0.3);
     
     // Use smoothstep for antialiasing - note: 1.0 - smoothstep to invert
     let alpha = 1.0 - smoothstep(0.5 - width, 0.5 + width, distance);
@@ -455,7 +461,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             let char_x = (i as u32 % chars_per_row) * char_size;
             let char_y = (i as u32 / chars_per_row) * char_size;
             
-            let (metrics, bitmap) = self.font.rasterize(ch, 48.0);
+            let (metrics, bitmap) = self.font.rasterize(ch, 12.0);
             
             if !bitmap.is_empty() && metrics.width > 0 && metrics.height > 0 {
                 // Generate SDF
@@ -467,7 +473,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
                     }
                 };
                 
-                let sdf_radius = 8.0;
+                let sdf_radius = 4.0;
                 let sdf_data = bitmap_glyph.render_sdf(sdf_radius as usize);
                 
                 let sdf_width = metrics.width + 2 * self.buffer_size;
@@ -704,7 +710,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         layout_settings.x = x;
         layout_settings.y = y;
         layout.reset(&layout_settings);
-        layout.append(fonts, &TextStyle::new(text, 48.0, 0));
+        layout.append(fonts, &TextStyle::new(text, 12.0, 0));
     
         let mut vertices = Vec::new();
         
@@ -784,5 +790,54 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         
         // For now, just return Ok - the actual rendering happens in render_text
         Ok(())
+    }
+
+    // Character-based text operations
+    pub fn insert_char(&mut self, ch: char) -> Result<(), JsValue> {
+        if self.cursor_position <= self.text_buffer.len() {
+            self.text_buffer.insert(self.cursor_position, ch);
+            self.cursor_position += 1;
+            self.update_last_text();
+        }
+        Ok(())
+    }
+
+    pub fn delete_char_before_cursor(&mut self) -> Result<(), JsValue> {
+        if self.cursor_position > 0 {
+            self.text_buffer.remove(self.cursor_position - 1);
+            self.cursor_position -= 1;
+            self.update_last_text();
+        }
+        Ok(())
+    }
+
+    pub fn move_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+        }
+    }
+
+    pub fn move_cursor_right(&mut self) {
+        if self.cursor_position < self.text_buffer.len() {
+            self.cursor_position += 1;
+        }
+    }
+
+    pub fn get_cursor_position(&self) -> usize {
+        self.cursor_position
+    }
+
+    pub fn get_text(&self) -> String {
+        self.text_buffer.iter().collect()
+    }
+
+    pub fn set_text(&mut self, text: &str) {
+        self.text_buffer = text.chars().collect();
+        self.cursor_position = self.text_buffer.len();
+        self.update_last_text();
+    }
+
+    fn update_last_text(&mut self) {
+        self.last_text = self.text_buffer.iter().collect();
     }
 }

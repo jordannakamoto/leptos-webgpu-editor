@@ -90,7 +90,7 @@ pub fn setup_input_capture() {
         let buffer_ptr = crate::input_buffer::get_input_buffer_ptr();
         let memory = wasm_bindgen::memory();
         
-        // Setup input event listener with shared buffer
+        // Setup input event listener that syncs with GPU renderer
         let input_callback = Closure::wrap(Box::new(move || {
             let window = web_sys::window().unwrap();
             let document = window.document().unwrap();
@@ -100,20 +100,27 @@ pub fn setup_input_capture() {
                 let value = textarea.value();
                 let cursor_pos = textarea.selection_start().unwrap_or(Some(0)).unwrap_or(0) as usize;
                 
-                // Write directly to shared memory
-                let bytes = value.as_bytes();
-                if bytes.len() <= 1024 {
-                    unsafe {
-                        let buffer = std::slice::from_raw_parts_mut(buffer_ptr, 1024);
-                        buffer[..bytes.len()].copy_from_slice(bytes);
+                // Sync textarea with GPU renderer
+                wasm_bindgen_futures::spawn_local(async move {
+                    match crate::text_input::get_or_init_webgpu_resources().await {
+                        Ok(resources) => {
+                            let mut borrowed = resources.borrow_mut();
+                            if let Some(renderer) = borrowed.fast_text_renderer.as_mut() {
+                                // Set the text from textarea to GPU renderer
+                                renderer.set_text(&value);
+                                let text = renderer.get_text();
+                                let cursor_pos = renderer.get_cursor_position();
+                                drop(borrowed);
+                                
+                                // Render the synchronized text
+                                if let Err(e) = crate::fast_text_input::render_from_buffer(&text, cursor_pos) {
+                                    console_log!("Render error: {:?}", e);
+                                }
+                            }
+                        }
+                        Err(e) => console_log!("Failed to get renderer: {:?}", e),
                     }
-                    
-                    // Commit input
-                    crate::input_buffer::commit_input(bytes.len(), cursor_pos);
-                }
-                
-                // DON'T clear textarea - let it accumulate text
-                // textarea.set_value("");
+                });
             }
         }) as Box<dyn FnMut()>);
         
@@ -126,14 +133,17 @@ pub fn setup_input_capture() {
                 "ArrowLeft" => {
                     event.prevent_default();
                     crate::input_buffer::move_cursor_left();
+                    sync_textarea_with_gpu_renderer();
                 }
                 "ArrowRight" => {
                     event.prevent_default();
                     crate::input_buffer::move_cursor_right();
+                    sync_textarea_with_gpu_renderer();
                 }
                 "Backspace" => {
                     event.prevent_default();
                     crate::input_buffer::delete_char_at_cursor();
+                    sync_textarea_with_gpu_renderer();
                 }
                 _ => {}
             }
@@ -142,6 +152,34 @@ pub fn setup_input_capture() {
         textarea.set_onkeydown(Some(keydown_callback.as_ref().unchecked_ref()));
         keydown_callback.forget();
     }
+}
+
+fn sync_textarea_with_gpu_renderer() {
+    wasm_bindgen_futures::spawn_local(async move {
+        match crate::text_input::get_or_init_webgpu_resources().await {
+            Ok(resources) => {
+                let borrowed = resources.borrow();
+                if let Some(renderer) = borrowed.fast_text_renderer.as_ref() {
+                    let text = renderer.get_text();
+                    let cursor_pos = renderer.get_cursor_position();
+                    drop(borrowed);
+                    
+                    // Update textarea to match GPU renderer state
+                    if let Some(window) = web_sys::window() {
+                        if let Some(document) = window.document() {
+                            if let Some(textarea) = document.get_element_by_id("hidden-input") {
+                                let textarea: HtmlTextAreaElement = textarea.dyn_into().unwrap();
+                                textarea.set_value(&text);
+                                let _ = textarea.set_selection_start(Some(cursor_pos as u32));
+                                let _ = textarea.set_selection_end(Some(cursor_pos as u32));
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => console_log!("Failed to get renderer: {:?}", e),
+        }
+    });
 }
 
 #[wasm_bindgen]
