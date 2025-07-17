@@ -232,13 +232,6 @@ pub fn render_from_buffer(text: &str, cursor_pos: usize) -> Result<(), JsValue> 
 
 async fn render_fast_text(text: &str, _cursor_pos: usize) -> Result<(), JsValue> {
     console_log!("render_fast_text called with text: '{}' (length: {})", text, text.len());
-    // Wait for DOM to be ready
-    let promise = js_sys::Promise::new(&mut |resolve, _| {
-        if let Some(window) = web_sys::window() {
-            let _ = window.request_animation_frame(&resolve);
-        }
-    });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
     
     // Get or initialize WebGPU resources
     let resources = crate::text_input::get_or_init_webgpu_resources().await?;
