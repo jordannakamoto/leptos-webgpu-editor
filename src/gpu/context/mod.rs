@@ -19,6 +19,7 @@ macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
 }
 
+#[derive(Clone)]
 pub struct GpuContext {
     pub adapter: GpuAdapter,
     pub device: GpuDevice,
@@ -26,6 +27,8 @@ pub struct GpuContext {
     pub canvas: HtmlCanvasElement,
     pub offscreen_texture: web_sys::GpuTexture,
     pub offscreen_view: web_sys::GpuTextureView,
+    pub queue: web_sys::GpuQueue,
+    pub texture_view: web_sys::GpuTextureView,
 }
 
 impl GpuContext {
@@ -50,8 +53,8 @@ impl GpuContext {
         
         // Configure canvas context with copy destination for double buffering
         let mut config = web_sys::GpuCanvasConfiguration::new(&device, web_sys::GpuTextureFormat::Bgra8unorm);
-        config.usage(gpu_texture_usage::RENDER_ATTACHMENT | gpu_texture_usage::COPY_DST);
-        config.alpha_mode(web_sys::GpuCanvasAlphaMode::Opaque);
+        config.set_usage(gpu_texture_usage::RENDER_ATTACHMENT | gpu_texture_usage::COPY_DST);
+        config.set_alpha_mode(web_sys::GpuCanvasAlphaMode::Opaque);
         context.configure(&config);
         
         // Create persistent offscreen texture for double buffering
@@ -62,7 +65,7 @@ impl GpuContext {
                     let mut extent = web_sys::GpuExtent3dDict::new(canvas.width());
                     extent.set_height(canvas.height());
                     extent.set_depth_or_array_layers(1);
-                    extent
+                    extent.into()
                 },
                 gpu_texture_usage::RENDER_ATTACHMENT | gpu_texture_usage::COPY_SRC,
             );
@@ -72,6 +75,12 @@ impl GpuContext {
         
         let offscreen_view = offscreen_texture.create_view()?;
         
+        let queue = device.queue();
+        let texture_view = {
+            let current_texture = context.get_current_texture()?;
+            current_texture.create_view()?
+        };
+        
         Ok(Self {
             adapter,
             device,
@@ -79,6 +88,8 @@ impl GpuContext {
             canvas: canvas.clone(),
             offscreen_texture,
             offscreen_view,
+            queue,
+            texture_view,
         })
     }
     

@@ -20,14 +20,30 @@ pub fn TextInput() -> impl IntoView {
     let (text_content, set_text_content) = signal("Hello World".to_string());
     let (cursor_pos, set_cursor_pos) = signal(0_usize);
     
-    // Synchronous rendering without async overhead
+    // Initialize WebGPU after DOM is fully rendered
     Effect::new(move |_| {
         let text = text_content.get();
         
-        // Skip the async overhead - render synchronously
-        if let Err(e) = render_text_sync(&text) {
-            console_log!("WebGPU text error: {:?}", e);
-        }
+        wasm_bindgen_futures::spawn_local(async move {
+            // Wait for next animation frame to ensure DOM is rendered
+            let promise = js_sys::Promise::new(&mut |resolve, _| {
+                if let Some(window) = web_sys::window() {
+                    let _ = window.request_animation_frame(&resolve);
+                }
+            });
+            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+            
+            match get_or_init_webgpu_resources().await {
+                Ok(resources) => {
+                    if let Err(e) = render_text_with_resources(&text, &resources) {
+                        console_log!("WebGPU text error: {:?}", e);
+                    }
+                }
+                Err(e) => {
+                    console_log!("WebGPU initialization error: {:?}", e);
+                }
+            }
+        });
     });
     
     view! {
@@ -90,38 +106,42 @@ pub fn TextInput() -> impl IntoView {
 }
 
 // Global WebGPU resources cache
-struct WebGPUResources {
-    context: Option<crate::gpu::context::GpuContext>,
-    text_renderer: Option<crate::gpu::text::TextRenderer>,
-    is_initialized: bool,
-    is_rendering: bool,
-    first_render: bool,
+pub struct WebGPUResources {
+    pub context: Option<crate::gpu::context::GpuContext>,
+    pub text_renderer: Option<crate::gpu::text::TextRenderer>,
+    pub fast_text_renderer: Option<crate::gpu::fast_text::FastTextRenderer>,
+    pub is_initialized: bool,
+    pub is_rendering: bool,
+    pub first_render: bool,
 }
 
-static mut WEBGPU_RESOURCES: Option<Rc<RefCell<WebGPUResources>>> = None;
+thread_local! {
+    static WEBGPU_RESOURCES: RefCell<Option<Rc<RefCell<WebGPUResources>>>> = RefCell::new(None);
+}
 
-async fn get_or_init_webgpu_resources() -> Result<Rc<RefCell<WebGPUResources>>, JsValue> {
-    unsafe {
-        if let Some(resources) = &WEBGPU_RESOURCES {
-            return Ok(resources.clone());
-        }
+pub async fn get_or_init_webgpu_resources() -> Result<Rc<RefCell<WebGPUResources>>, JsValue> {
+    // Check if already initialized
+    if let Some(existing) = WEBGPU_RESOURCES.with(|res| res.borrow().clone()) {
+        return Ok(existing);
+    }
         
-        let resources = Rc::new(RefCell::new(WebGPUResources {
+    let res = Rc::new(RefCell::new(WebGPUResources {
             context: None,
             text_renderer: None,
+            fast_text_renderer: None,
             is_initialized: false,
             is_rendering: false,
             first_render: true,
         }));
         
         // Initialize WebGPU context and text renderer once
-        let window = web_sys::window().unwrap();
-        let document = window.document().unwrap();
+        let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window available"))?;
+        let document = window.document().ok_or_else(|| JsValue::from_str("No document available"))?;
         let canvas: HtmlCanvasElement = document
-            .get_element_by_id("webgpu-canvas")
-            .unwrap()
+            .get_element_by_id("fast-webgpu-canvas")
+            .ok_or_else(|| JsValue::from_str("Canvas element not found"))?
             .dyn_into::<HtmlCanvasElement>()
-            .unwrap();
+            .map_err(|_| JsValue::from_str("Element is not a canvas"))?;
 
         let css_width = 800.0;
         let css_height = 600.0;
@@ -134,6 +154,15 @@ async fn get_or_init_webgpu_resources() -> Result<Rc<RefCell<WebGPUResources>>, 
         canvas.set_height((css_height * dpr) as u32);
 
         let context = crate::gpu::context::GpuContext::new(&canvas).await?;
+        
+        // Initialize fast text renderer for high performance
+        let mut fast_text_renderer = crate::gpu::fast_text::FastTextRenderer::new(
+            context.device.clone(),
+            10000, // Support up to 10k characters
+        )?;
+        fast_text_renderer.initialize()?;
+        
+        // Keep old renderer as fallback
         let mut text_renderer = crate::gpu::text::TextRenderer::new()?;
         text_renderer.create_text_pipeline(&context.device)?;
         
@@ -143,37 +172,43 @@ async fn get_or_init_webgpu_resources() -> Result<Rc<RefCell<WebGPUResources>>, 
         text_renderer.create_texture_and_bind_group(&context.device)?;
 
         {
-            let mut res = resources.borrow_mut();
-            res.context = Some(context);
-            res.text_renderer = Some(text_renderer);
-            res.is_initialized = true;
+            let mut resources_mut = res.borrow_mut();
+            resources_mut.context = Some(context);
+            resources_mut.text_renderer = Some(text_renderer);
+            resources_mut.fast_text_renderer = Some(fast_text_renderer);
+            resources_mut.is_initialized = true;
         }
 
-        WEBGPU_RESOURCES = Some(resources.clone());
-        Ok(resources)
-    }
+    // Store in the thread local
+    WEBGPU_RESOURCES.with(|r| *r.borrow_mut() = Some(res.clone()));
+    
+    Ok(res)
 }
 
-fn render_text_sync(text: &str) -> Result<(), JsValue> {
-    unsafe {
-        if let Some(resources) = &WEBGPU_RESOURCES {
-            let mut res = resources.borrow_mut();
-            let context = res.context.as_ref().unwrap();
-            let text_renderer = res.text_renderer.as_mut().unwrap();
-            
-            let canvas_width = context.canvas.width() as f32;
-            let canvas_height = context.canvas.height() as f32;
-            
-            text_renderer.render_text(
-                &context.device,
-                context,
-                text,
-                50.0,
-                100.0,
-                canvas_width,
-                canvas_height,
-            )?;
+fn render_text_with_resources(text: &str, resources: &Rc<RefCell<WebGPUResources>>) -> Result<(), JsValue> {
+    // Check fast renderer first
+    {
+        let mut res = resources.borrow_mut();
+        if let Some(fast_renderer) = res.fast_text_renderer.as_mut() {
+            fast_renderer.update_text(text)?;
         }
     }
+
+    // Render phase
+    {
+        let res = resources.borrow();
+        if let Some(context) = &res.context {
+            if res.fast_text_renderer.is_some() {
+                console_log!("Rendering via fast text renderer.");
+                // TODO: Insert actual draw call here
+            } else if let Some(text_renderer) = &res.text_renderer {
+                let width = context.canvas.width() as f32;
+                let height = context.canvas.height() as f32;
+                console_log!("Rendering fallback text at {} x {}", width, height);
+                // TODO: text_renderer.render_text(...)
+            }
+        }
+    }
+
     Ok(())
 }

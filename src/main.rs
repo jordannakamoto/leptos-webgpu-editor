@@ -4,6 +4,8 @@ use web_sys::{HtmlCanvasElement, HtmlElement};
 
 mod gpu;
 mod text_input;
+mod input_buffer;
+mod fast_text_input;
 
 #[wasm_bindgen]
 extern "C" {
@@ -93,7 +95,7 @@ canvas_elem
     let canvas_height = canvas.height() as f32;
     text_renderer.render_text(
         &context.device,
-        &view,
+        &context,
         "Hello World",
         100.0,
         100.0,
@@ -109,8 +111,8 @@ fn main() {
     leptos::mount::mount_to_body(|| {
         view! {
             <div>
-                <h1>"WebGPU Text Editor"</h1>
-                <text_input::TextInput />
+                <h1>"High-Performance WebGPU Text Editor"</h1>
+                <fast_text_input::FastTextInput />
                 <div style="margin-top: 10px;">
                     <button on:click=move |_| {
                         wasm_bindgen_futures::spawn_local(async {

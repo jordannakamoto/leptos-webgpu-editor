@@ -40,8 +40,13 @@ pub struct TextRenderer {
 impl TextRenderer {
     pub fn new() -> Result<Self, JsValue> {
         let font_data = include_bytes!("../assets/fonts/Spectral-ExtraLight.ttf");
+        
+        if font_data.is_empty() {
+            return Err(JsValue::from_str("Font file is empty or not found"));
+        }
+        
         let font = Font::from_bytes(font_data as &[u8], FontSettings::default())
-            .map_err(|e| JsValue::from_str(&format!("Failed to load font: {:?}", e)))?;
+            .map_err(|e| JsValue::from_str(&format!("Failed to load font Spectral-ExtraLight.ttf: {:?}", e)))?;
         
         Ok(Self {
             font,
@@ -440,7 +445,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         
         // Copy from offscreen texture to swapchain
         let swapchain_texture = context.context.get_current_texture()?;
-        command_encoder.copy_texture_to_texture(
+        command_encoder.copy_texture_to_texture_with_u32_sequence(
             &{
                 let source = web_sys::GpuTexelCopyTextureInfo::new(&context.offscreen_texture);
                 source
@@ -453,7 +458,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
                 let mut copy_size = web_sys::GpuExtent3dDict::new(context.canvas.width());
                 copy_size.set_height(context.canvas.height());
                 copy_size.set_depth_or_array_layers(1);
-                copy_size
+                copy_size.into()
             },
         )?;
         
