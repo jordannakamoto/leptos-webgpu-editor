@@ -9,5 +9,6 @@ pub mod context;
 pub mod pipeline;
 pub mod shaders;
 pub mod square;
+pub mod text;
 pub mod utils;
 

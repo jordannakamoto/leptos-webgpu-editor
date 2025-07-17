@@ -42,11 +42,40 @@ async fn render_square() -> Result<(), JsValue> {
     Ok(())
 }
 
+async fn render_text() -> Result<(), JsValue> {
+    console_log!("Starting text render...");
+    
+    // Get canvas
+    let window = web_sys::window().unwrap();
+    let document = window.document().unwrap();
+    let canvas = document
+        .get_element_by_id("webgpu-canvas")
+        .unwrap()
+        .dyn_into::<HtmlCanvasElement>()
+        .unwrap();
+    
+    // Initialize GPU context
+    let context = gpu::context::GpuContext::new(&canvas).await?;
+    
+    // Create text renderer
+    let mut text_renderer = gpu::text::TextRenderer::new()?;
+    text_renderer.create_text_pipeline(&context.device)?;
+    
+    // Get current texture view
+    let view = context.get_current_texture_view()?;
+    
+    // Render text
+    text_renderer.render_text(&context.device, &view, "Hello World", 0.0, 0.0)?;
+    
+    console_log!("Text rendered successfully!");
+    Ok(())
+}
+
 fn main() {
     leptos::mount::mount_to_body(|| {
         view! {
             <div>
-                <h1>"WebGPU Square Renderer"</h1>
+                <h1>"WebGPU Renderer"</h1>
                 <canvas id="webgpu-canvas" width="800" height="600" style="border: 1px solid black;"></canvas>
                 <div>
                     <button on:click=move |_| {
@@ -57,6 +86,15 @@ fn main() {
                         });
                     }>
                         "Draw Square"
+                    </button>
+                    <button on:click=move |_| {
+                        wasm_bindgen_futures::spawn_local(async {
+                            if let Err(e) = render_text().await {
+                                console_log!("WebGPU text error: {:?}", e);
+                            }
+                        });
+                    }>
+                        "Draw Text"
                     </button>
                 </div>
             </div>
