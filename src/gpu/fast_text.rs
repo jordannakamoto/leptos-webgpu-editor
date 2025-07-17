@@ -118,6 +118,10 @@ impl FastTextRenderer {
     pub fn initialize(&mut self) -> Result<(), JsValue> {
         console_log!("Initializing FastTextRenderer GPU resources");
         
+        // Pre-populate SDF atlas with common characters
+        let common_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:'\",.<>?/ ";
+        self.generate_sdf_atlas(common_chars)?;
+        
         // Create persistent vertex buffer (ring buffer style)
         let vertex_buffer_size = self.max_glyphs * 6 * 4 * 4; // 6 vertices * 4 floats * 4 bytes
         let vertex_buffer = self.device.create_buffer(&{
@@ -168,6 +172,9 @@ impl FastTextRenderer {
         
         // Create render pipeline
         self.create_render_pipeline()?;
+        
+        // Create texture and bind group after atlas is populated
+        self.create_texture_and_bind_group()?;
         
         console_log!("FastTextRenderer initialized successfully");
         Ok(())
@@ -545,16 +552,12 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             self.update_text(text)?;
         }
         
-        // Ensure we have atlas and bind group BEFORE generating vertices
-        if self.sdf_atlas.is_none() || !text.chars().all(|c| c.is_whitespace() || self.glyph_map.contains_key(&c)) {
-            console_log!("Generating SDF atlas for text: '{}'", text);
+        // Only regenerate atlas if we have new characters not in the pre-populated set
+        if !text.chars().all(|c| c.is_whitespace() || self.glyph_map.contains_key(&c)) {
+            console_log!("Extending SDF atlas for new characters in text: '{}'", text);
             self.generate_sdf_atlas(text)?;
             self.atlas_texture = None;
             self.bind_group = None;
-        }
-
-        if self.atlas_texture.is_none() {
-            console_log!("Creating texture and bind group");
             self.create_texture_and_bind_group()?;
         }
         
