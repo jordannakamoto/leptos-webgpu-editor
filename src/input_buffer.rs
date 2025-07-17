@@ -68,8 +68,10 @@ pub fn insert_char_at_cursor(char_code: u32) {
     unsafe {
         if let Some(ch) = char::from_u32(char_code) {
             let mut text = get_current_text();
+            console_log!("insert_char_at_cursor: '{}' into '{}' at position {}", ch, text, CURSOR_POSITION as usize);
             if CURSOR_POSITION <= text.len() {
                 text.insert(CURSOR_POSITION, ch);
+                console_log!("Result text: '{}'", text);
                 
                 // Write back to buffer
                 let bytes = text.as_bytes();
@@ -77,6 +79,11 @@ pub fn insert_char_at_cursor(char_code: u32) {
                     INPUT_BUFFER[..bytes.len()].copy_from_slice(bytes);
                     TEXT_LENGTH = bytes.len();
                     CURSOR_POSITION += ch.len_utf8();
+                    
+                    // Trigger render with updated text
+                    if let Err(e) = crate::fast_text_input::render_from_buffer(&text, CURSOR_POSITION) {
+                        console_log!("Render error: {:?}", e);
+                    }
                 }
             }
         }
@@ -87,6 +94,7 @@ pub fn insert_char_at_cursor(char_code: u32) {
 pub fn delete_char_at_cursor() {
     unsafe {
         let mut text = get_current_text();
+        console_log!("delete_char_at_cursor: '{}' at position {}", text, CURSOR_POSITION as usize);
         if CURSOR_POSITION > 0 && CURSOR_POSITION <= text.len() {
             // Find the previous character boundary
             let mut char_start = CURSOR_POSITION;
@@ -108,6 +116,11 @@ pub fn delete_char_at_cursor() {
                     INPUT_BUFFER[..bytes.len()].copy_from_slice(bytes);
                     TEXT_LENGTH = bytes.len();
                     CURSOR_POSITION = char_start;
+                    
+                    // Trigger render with updated text
+                    if let Err(e) = crate::fast_text_input::render_from_buffer(&text, CURSOR_POSITION) {
+                        console_log!("Render error: {:?}", e);
+                    }
                 }
             }
         }

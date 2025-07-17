@@ -112,8 +112,8 @@ pub fn setup_input_capture() {
                     crate::input_buffer::commit_input(bytes.len(), cursor_pos);
                 }
                 
-                // Clear textarea for next input
-                textarea.set_value("");
+                // DON'T clear textarea - let it accumulate text
+                // textarea.set_value("");
             }
         }) as Box<dyn FnMut()>);
         
