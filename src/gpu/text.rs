@@ -185,7 +185,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
     }
 
     pub fn generate_sdf_atlas(&mut self, text: &str) -> Result<(), JsValue> {
-        console_log!("Generating SDF atlas for: '{}'", text);
+        // console_log!("Generating SDF atlas for: '{}'", text);
         
         let atlas_size = (self.atlas_width * self.atlas_height) as usize;
         let mut atlas_data = vec![128u8; atlas_size]; // Initialize with middle gray
@@ -194,7 +194,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         unique_chars.sort();
         unique_chars.dedup();
         
-        console_log!("Processing {} unique characters", unique_chars.len());
+        // console_log!("Processing {} unique characters", unique_chars.len());
         
         let char_size = 64;
         let chars_per_row = self.atlas_width / char_size;
@@ -212,7 +212,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
                 let bitmap_glyph = match BitmapGlyph::from_unbuffered(&bitmap, metrics.width, metrics.height, self.buffer_size) {
                     Ok(glyph) => glyph,
                     Err(e) => {
-                        console_log!("SDF glyph creation failed for '{}': {:?}", ch, e);
+                        // console_log!("SDF glyph creation failed for '{}': {:?}", ch, e);
                         continue;
                     }
                 };
@@ -257,7 +257,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         }
         
         self.sdf_atlas = Some(atlas_data);
-        console_log!("SDF atlas generated successfully");
+        // console_log!("SDF atlas generated successfully");
         Ok(())
     }
 

@@ -7,7 +7,7 @@ edition = "2024"
 wgpu = { version = "0.20", features = ["webgl"] }
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = false
+wasm-opt = ["-O4", "--enable-simd"]
 
 [profile.dev]
 opt-level = 0          # no optimizations
@@ -15,6 +15,37 @@ debug = true           # full debug info
 incremental = true     # enable incremental builds
 codegen-units = 16     # more parallel codegen
 overflow-checks = false
+
+[profile.release]
+opt-level = "z"        # optimize for size
+debug = false          # no debug info
+lto = "fat"            # fat link time optimization
+codegen-units = 1      # single codegen unit for better optimization
+panic = "abort"        # smaller wasm size
+overflow-checks = false
+strip = true           # remove debug symbols
+
+# Size-optimized release profile
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Target-specific optimizations for wasm
+[profile.release.package."*"]
+opt-level = 3
+
+# Enable target-cpu features for better performance
+[env]
+RUSTFLAGS = "-C target-cpu=native"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false
 
 [dependencies]
 leptos = { version = "0.8.3", default-features = false, features = ["csr"] }
@@ -24,6 +55,13 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 fontdue = "0.8"
 sdf_glyph_renderer = "1.0.2"
+idb = "0.6"
+rexie = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[target.wasm32-unknown-unknown.dependencies]
+# Enable SIMD features for wasm
 
 [dependencies.web-sys]
 version = "0.3.77"

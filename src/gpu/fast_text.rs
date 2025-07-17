@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 use web_sys::{GpuDevice, GpuTextureView, GpuRenderPipeline, GpuBuffer, GpuComputePipeline};
 use std::collections::HashMap;
+use std::collections::BTreeMap;
 use fontdue::{Font, FontSettings, layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle}};
 use sdf_glyph_renderer::BitmapGlyph;
 
@@ -28,7 +29,9 @@ struct CachedRenderCommand {
     is_dirty: bool,
 }
 
-// Store glyph atlas info
+// Store glyph atlas info - packed for cache efficiency
+#[repr(C)]
+#[derive(Copy, Clone)]
 struct GlyphInfo {
     atlas_x: f32,
     atlas_y: f32,
@@ -38,12 +41,71 @@ struct GlyphInfo {
     sdf_height: f32,
 }
 
+// Cache-friendly vertex data layout - aligned for SIMD
+#[repr(C, align(16))]
+#[derive(Copy, Clone)]
+struct VertexData {
+    pos: [f32; 2],
+    uv: [f32; 2],
+}
+
+// Memory pool for vertex allocation
+struct VertexPool {
+    pool: Vec<VertexData>,
+    used: usize,
+    capacity: usize,
+}
+
+impl VertexPool {
+    fn new(capacity: usize) -> Self {
+        Self {
+            pool: Vec::with_capacity(capacity),
+            used: 0,
+            capacity,
+        }
+    }
+    
+    fn reset(&mut self) {
+        self.used = 0;
+        self.pool.clear();
+    }
+    
+    fn allocate_quad(&mut self) -> Option<&mut [VertexData]> {
+        if self.used + 6 <= self.capacity {
+            let start = self.pool.len();
+            self.pool.resize(start + 6, VertexData { pos: [0.0; 2], uv: [0.0; 2] });
+            self.used += 6;
+            Some(&mut self.pool[start..start + 6])
+        } else {
+            None
+        }
+    }
+    
+    fn as_bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                self.pool.as_ptr() as *const u8,
+                self.pool.len() * std::mem::size_of::<VertexData>(),
+            )
+        }
+    }
+}
+
 // Dirty region tracking for incremental updates
 #[derive(Debug, Clone)]
 struct DirtyRegion {
     start_char: usize,
     end_char: usize,
     needs_update: bool,
+}
+
+// Line buffer for whole-line lookahead
+struct LineBuffer {
+    current_line_vertices: Vec<f32>,
+    line_start_pos: usize,
+    line_end_pos: usize,
+    cursor_line_index: usize, // Which line the cursor is on
+    is_dirty: bool,
 }
 
 pub struct FastTextRenderer {
@@ -62,12 +124,14 @@ pub struct FastTextRenderer {
     // Font and SDF atlas
     font: Font,
     sdf_atlas: Option<Vec<u8>>,
-    glyph_map: HashMap<char, GlyphInfo>,
+    glyph_map: BTreeMap<char, GlyphInfo>, // Better cache locality for sequential access
+    vertex_pool: VertexPool,
     
     // Caching and optimization
     cached_commands: HashMap<String, CachedRenderCommand>,
     dirty_regions: Vec<DirtyRegion>,
     last_text: String,
+    line_buffer: LineBuffer,
     
     // Text state management
     text_buffer: Vec<char>,
@@ -81,7 +145,7 @@ pub struct FastTextRenderer {
 
 impl FastTextRenderer {
     pub fn new(device: GpuDevice, max_glyphs: usize) -> Result<Self, JsValue> {
-        console_log!("Creating FastTextRenderer with {} max glyphs", max_glyphs);
+        // console_log!("Creating FastTextRenderer with {} max glyphs", max_glyphs);
         
         // Load font
         let font_data = include_bytes!("../assets/fonts/Spectral-ExtraLight.ttf");
@@ -103,10 +167,18 @@ impl FastTextRenderer {
             bind_group: None,
             font,
             sdf_atlas: None,
-            glyph_map: HashMap::new(),
+            glyph_map: BTreeMap::new(),
+            vertex_pool: VertexPool::new(max_glyphs * 6), // 6 vertices per glyph
             cached_commands: HashMap::new(),
             dirty_regions: Vec::new(),
             last_text: String::new(),
+            line_buffer: LineBuffer {
+                current_line_vertices: Vec::new(),
+                line_start_pos: 0,
+                line_end_pos: 0,
+                cursor_line_index: 0,
+                is_dirty: true,
+            },
             text_buffer: Vec::new(),
             cursor_position: 0,
             max_glyphs,
@@ -116,7 +188,7 @@ impl FastTextRenderer {
     }
     
     pub fn initialize(&mut self) -> Result<(), JsValue> {
-        console_log!("Initializing FastTextRenderer GPU resources");
+        // console_log!("Initializing FastTextRenderer GPU resources");
         
         // Pre-populate SDF atlas with common characters
         let common_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:'\",.<>?/ ";
@@ -176,7 +248,7 @@ impl FastTextRenderer {
         // Create texture and bind group after atlas is populated
         self.create_texture_and_bind_group()?;
         
-        console_log!("FastTextRenderer initialized successfully");
+        // console_log!("FastTextRenderer initialized successfully");
         Ok(())
     }
     
@@ -389,6 +461,13 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
     }
     
     pub fn update_text(&mut self, new_text: &str) -> Result<(), JsValue> {
+        // Skip dirty region calculation for single character changes (most common case)
+        if self.last_text.len().abs_diff(new_text.len()) == 1 {
+            // Single character insert/delete - no need for complex dirty region tracking
+            self.last_text = new_text.to_string();
+            return Ok(());
+        }
+        
         // Calculate dirty regions by comparing with previous text
         self.calculate_dirty_regions(new_text);
         
@@ -441,18 +520,18 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             });
         }
         
-        console_log!("Found {} dirty regions", self.dirty_regions.len());
+        // console_log!("Found {} dirty regions", self.dirty_regions.len());
     }
     
     fn update_dirty_regions(&mut self, text: &str) -> Result<(), JsValue> {
         // This would update only the changed character data
         // For now, simplified implementation
-        console_log!("Updating dirty regions for text: {}", text);
+        // console_log!("Updating dirty regions for text: {}", text);
         Ok(())
     }
     
     pub fn generate_sdf_atlas(&mut self, text: &str) -> Result<(), JsValue> {
-        console_log!("Generating SDF atlas for: '{}'", text);
+        // console_log!("Generating SDF atlas for: '{}'", text);
         
         let atlas_size = (self.atlas_size * self.atlas_size) as usize;
         let mut atlas_data = vec![128u8; atlas_size]; // Initialize with middle gray
@@ -461,7 +540,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         unique_chars.sort();
         unique_chars.dedup();
         
-        console_log!("Processing {} unique characters", unique_chars.len());
+        // console_log!("Processing {} unique characters", unique_chars.len());
         
         let char_size = 64;
         let chars_per_row = self.atlas_size / char_size;
@@ -479,7 +558,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
                 let bitmap_glyph = match BitmapGlyph::from_unbuffered(&bitmap, metrics.width, metrics.height, self.buffer_size) {
                     Ok(glyph) => glyph,
                     Err(e) => {
-                        console_log!("SDF glyph creation failed for '{}': {:?}", ch, e);
+                        // console_log!("SDF glyph creation failed for '{}': {:?}", ch, e);
                         continue;
                     }
                 };
@@ -524,7 +603,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         }
         
         self.sdf_atlas = Some(atlas_data);
-        console_log!("SDF atlas generated successfully");
+        // console_log!("SDF atlas generated successfully");
         Ok(())
     }
     
@@ -554,7 +633,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         
         // Only regenerate atlas if we have new characters not in the pre-populated set
         if !text.chars().all(|c| c.is_whitespace() || self.glyph_map.contains_key(&c)) {
-            console_log!("Extending SDF atlas for new characters in text: '{}'", text);
+            // console_log!("Extending SDF atlas for new characters in text: '{}'", text);
             self.generate_sdf_atlas(text)?;
             self.atlas_texture = None;
             self.bind_group = None;
@@ -565,10 +644,10 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         let vertices = self.generate_text_vertices(text, x, y, screen_width, screen_height);
         let vertex_count = vertices.len() / 4;
         
-        console_log!("Generated {} vertices for text: '{}'", vertex_count, text);
+        // console_log!("Generated {} vertices for text: '{}'", vertex_count, text);
         
         if vertex_count == 0 {
-            console_log!("No vertices generated, returning early");
+            // console_log!("No vertices generated, returning early");
             return Ok(());
         }
         
@@ -640,7 +719,7 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
     
     fn execute_cached_render(&self, _cached: &CachedRenderCommand, _context: &crate::gpu::context::GpuContext) -> Result<(), JsValue> {
         // This function is deprecated - use render_text instead
-        console_log!("execute_cached_render is deprecated - use render_text instead");
+        // console_log!("execute_cached_render is deprecated - use render_text instead");
         Ok(())
     }
     
@@ -719,13 +798,13 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
         let mut vertices = Vec::new();
         
         for glyph in layout.glyphs() {
-            console_log!("Processing glyph: '{}' at position ({}, {})", glyph.parent, glyph.x, glyph.y);
+            // console_log!("Processing glyph: '{}' at position ({}, {})", glyph.parent, glyph.x, glyph.y);
             if let Some(glyph_info) = self.glyph_map.get(&glyph.parent) {
-                console_log!("Found glyph info for: '{}' at atlas ({}, {})", glyph.parent, glyph_info.atlas_x, glyph_info.atlas_y);
+                // console_log!("Found glyph info for: '{}' at atlas ({}, {})", glyph.parent, glyph_info.atlas_x, glyph_info.atlas_y);
                 // Use layout positions directly - fontdue handles baseline alignment
                 let glyph_left = glyph.x as f32;
                 let glyph_top = glyph.y as f32;
-                console_log!("Screen position: ({}, {})", glyph_left, glyph_top);
+                // console_log!("Screen position: ({}, {})", glyph_left, glyph_top);
                 
                 // Account for the SDF buffer padding
                 let buffer_offset = self.buffer_size as f32;
@@ -759,12 +838,12 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             }
         }
         
-        console_log!("Generated {} total vertices", vertices.len());
+        // console_log!("Generated {} total vertices", vertices.len());
         vertices
     }
     
     fn generate_and_cache_render_command(&mut self, cache_key: &str, context: &crate::gpu::context::GpuContext) -> Result<(), JsValue> {
-        console_log!("Generating new render command for key: {}", cache_key);
+        // console_log!("Generating new render command for key: {}", cache_key);
         
         // Generate SDF atlas if needed
         let current_text = self.last_text.clone();
@@ -802,6 +881,9 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             self.text_buffer.insert(self.cursor_position, ch);
             self.cursor_position += 1;
             self.update_last_text();
+            
+            // Prepare line buffer for next operations
+            self.prepare_current_line();
         }
         Ok(())
     }
@@ -811,6 +893,9 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
             self.text_buffer.remove(self.cursor_position - 1);
             self.cursor_position -= 1;
             self.update_last_text();
+            
+            // Prepare line buffer for next operations
+            self.prepare_current_line();
         }
         Ok(())
     }
@@ -818,12 +903,16 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
     pub fn move_cursor_left(&mut self) {
         if self.cursor_position > 0 {
             self.cursor_position -= 1;
+            // Check if we moved to a different line
+            self.prepare_current_line();
         }
     }
 
     pub fn move_cursor_right(&mut self) {
         if self.cursor_position < self.text_buffer.len() {
             self.cursor_position += 1;
+            // Check if we moved to a different line
+            self.prepare_current_line();
         }
     }
 
@@ -843,5 +932,125 @@ fn main(@location(0) tex_coord: vec2<f32>) -> @location(0) vec4<f32> {
 
     fn update_last_text(&mut self) {
         self.last_text = self.text_buffer.iter().collect();
+        self.invalidate_line_buffer();
+    }
+    
+    fn invalidate_line_buffer(&mut self) {
+        self.line_buffer.is_dirty = true;
+    }
+    
+    fn get_current_line_bounds(&self) -> (usize, usize) {
+        let text = self.get_text();
+        let chars: Vec<char> = text.chars().collect();
+        
+        // Find line start (search backwards for newline)
+        let mut line_start = 0;
+        for i in (0..self.cursor_position).rev() {
+            if i < chars.len() && chars[i] == '\n' {
+                line_start = i + 1;
+                break;
+            }
+        }
+        
+        // Find line end (search forwards for newline)
+        let mut line_end = chars.len();
+        for i in self.cursor_position..chars.len() {
+            if chars[i] == '\n' {
+                line_end = i;
+                break;
+            }
+        }
+        
+        (line_start, line_end)
+    }
+    
+    fn get_current_line(&self) -> String {
+        let (line_start, line_end) = self.get_current_line_bounds();
+        let text = self.get_text();
+        let chars: Vec<char> = text.chars().collect();
+        
+        chars[line_start..line_end].iter().collect()
+    }
+    
+    pub fn prepare_current_line(&mut self) {
+        if !self.line_buffer.is_dirty {
+            return; // Already prepared
+        }
+        
+        let (line_start, line_end) = self.get_current_line_bounds();
+        let line_text = self.get_current_line();
+        
+        // Generate vertices for the entire current line
+        self.line_buffer.current_line_vertices = 
+            self.generate_line_vertices(&line_text, line_start);
+        
+        self.line_buffer.line_start_pos = line_start;
+        self.line_buffer.line_end_pos = line_end;
+        self.line_buffer.is_dirty = false;
+    }
+    
+    fn generate_line_vertices(&mut self, line_text: &str, _line_start_pos: usize) -> Vec<f32> {
+        // Reset vertex pool for cache-friendly allocation
+        self.vertex_pool.reset();
+        
+        // Use the existing vertex generation but for just this line
+        let mut layout = fontdue::layout::Layout::new(fontdue::layout::CoordinateSystem::PositiveYDown);
+        let fonts = &[&self.font];
+        
+        let mut layout_settings = fontdue::layout::LayoutSettings::default();
+        layout_settings.x = 100.0; // Base x position
+        layout_settings.y = 100.0; // Base y position
+        layout.reset(&layout_settings);
+        layout.append(fonts, &fontdue::layout::TextStyle::new(line_text, 12.0, 0));
+        
+        let screen_width = 800.0;
+        let screen_height = 600.0;
+        
+        // Process glyphs in cache-friendly order
+        for glyph in layout.glyphs() {
+            if let Some(glyph_info) = self.glyph_map.get(&glyph.parent) {
+                // Allocate vertex quad from pool
+                if let Some(quad) = self.vertex_pool.allocate_quad() {
+                    let glyph_left = glyph.x as f32;
+                    let glyph_top = glyph.y as f32;
+                    
+                    // Account for the SDF buffer padding
+                    let buffer_offset = self.buffer_size as f32;
+                    let screen_left = glyph_left - buffer_offset;
+                    let screen_top = glyph_top - buffer_offset;
+                    let screen_right = screen_left + glyph_info.sdf_width;
+                    let screen_bottom = screen_top + glyph_info.sdf_height;
+                    
+                    // Convert to NDC (-1 to 1 range)
+                    let left = (screen_left / screen_width) * 2.0 - 1.0;
+                    let right = (screen_right / screen_width) * 2.0 - 1.0;
+                    let top = 1.0 - (screen_top / screen_height) * 2.0;
+                    let bottom = 1.0 - (screen_bottom / screen_height) * 2.0;
+                    
+                    // UV coordinates
+                    let u_left = glyph_info.atlas_x / self.atlas_size as f32;
+                    let u_right = (glyph_info.atlas_x + glyph_info.sdf_width) / self.atlas_size as f32;
+                    let v_top = glyph_info.atlas_y / self.atlas_size as f32;
+                    let v_bottom = (glyph_info.atlas_y + glyph_info.sdf_height) / self.atlas_size as f32;
+        
+                    // Fill quad with cache-friendly struct layout
+                    quad[0] = VertexData { pos: [left, bottom], uv: [u_left, v_bottom] };
+                    quad[1] = VertexData { pos: [right, bottom], uv: [u_right, v_bottom] };
+                    quad[2] = VertexData { pos: [left, top], uv: [u_left, v_top] };
+                    quad[3] = VertexData { pos: [right, bottom], uv: [u_right, v_bottom] };
+                    quad[4] = VertexData { pos: [right, top], uv: [u_right, v_top] };
+                    quad[5] = VertexData { pos: [left, top], uv: [u_left, v_top] };
+                }
+            }
+        }
+        
+        // Convert to the format expected by the existing code
+        let mut vertices = Vec::new();
+        for vertex in &self.vertex_pool.pool {
+            vertices.extend_from_slice(&vertex.pos);
+            vertices.extend_from_slice(&vertex.uv);
+        }
+        
+        vertices
     }
 }

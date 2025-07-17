@@ -90,60 +90,35 @@ pub fn setup_input_capture() {
         let buffer_ptr = crate::input_buffer::get_input_buffer_ptr();
         let memory = wasm_bindgen::memory();
         
-        // Setup input event listener that syncs with GPU renderer
+        // Simplified input handler - no textarea sync overhead
         let input_callback = Closure::wrap(Box::new(move || {
-            let window = web_sys::window().unwrap();
-            let document = window.document().unwrap();
-            
-            if let Some(textarea) = document.get_element_by_id("hidden-input") {
-                let textarea: HtmlTextAreaElement = textarea.dyn_into().unwrap();
-                let value = textarea.value();
-                let cursor_pos = textarea.selection_start().unwrap_or(Some(0)).unwrap_or(0) as usize;
-                
-                // Sync textarea with GPU renderer
-                wasm_bindgen_futures::spawn_local(async move {
-                    match crate::text_input::get_or_init_webgpu_resources().await {
-                        Ok(resources) => {
-                            let mut borrowed = resources.borrow_mut();
-                            if let Some(renderer) = borrowed.fast_text_renderer.as_mut() {
-                                // Set the text from textarea to GPU renderer
-                                renderer.set_text(&value);
-                                let text = renderer.get_text();
-                                let cursor_pos = renderer.get_cursor_position();
-                                drop(borrowed);
-                                
-                                // Render the synchronized text
-                                if let Err(e) = crate::fast_text_input::render_from_buffer(&text, cursor_pos) {
-                                    console_log!("Render error: {:?}", e);
-                                }
-                            }
-                        }
-                        Err(e) => console_log!("Failed to get renderer: {:?}", e),
-                    }
-                });
-            }
+            // Input events are now handled directly by keydown events
+            // This callback is kept for compatibility but does minimal work
         }) as Box<dyn FnMut()>);
         
         textarea.set_oninput(Some(input_callback.as_ref().unchecked_ref()));
         input_callback.forget();
         
-        // Handle special keys
+        // Handle special keys - direct GPU renderer operations
         let keydown_callback = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
             match event.key().as_str() {
                 "ArrowLeft" => {
                     event.prevent_default();
                     crate::input_buffer::move_cursor_left();
-                    sync_textarea_with_gpu_renderer();
                 }
                 "ArrowRight" => {
                     event.prevent_default();
                     crate::input_buffer::move_cursor_right();
-                    sync_textarea_with_gpu_renderer();
                 }
                 "Backspace" => {
                     event.prevent_default();
                     crate::input_buffer::delete_char_at_cursor();
-                    sync_textarea_with_gpu_renderer();
+                }
+                _ if event.key().len() == 1 => {
+                    event.prevent_default();
+                    if let Some(ch) = event.key().chars().next() {
+                        crate::input_buffer::insert_char_at_cursor(ch as u32);
+                    }
                 }
                 _ => {}
             }
@@ -154,33 +129,7 @@ pub fn setup_input_capture() {
     }
 }
 
-fn sync_textarea_with_gpu_renderer() {
-    wasm_bindgen_futures::spawn_local(async move {
-        match crate::text_input::get_or_init_webgpu_resources().await {
-            Ok(resources) => {
-                let borrowed = resources.borrow();
-                if let Some(renderer) = borrowed.fast_text_renderer.as_ref() {
-                    let text = renderer.get_text();
-                    let cursor_pos = renderer.get_cursor_position();
-                    drop(borrowed);
-                    
-                    // Update textarea to match GPU renderer state
-                    if let Some(window) = web_sys::window() {
-                        if let Some(document) = window.document() {
-                            if let Some(textarea) = document.get_element_by_id("hidden-input") {
-                                let textarea: HtmlTextAreaElement = textarea.dyn_into().unwrap();
-                                textarea.set_value(&text);
-                                let _ = textarea.set_selection_start(Some(cursor_pos as u32));
-                                let _ = textarea.set_selection_end(Some(cursor_pos as u32));
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => console_log!("Failed to get renderer: {:?}", e),
-        }
-    });
-}
+// Removed sync_textarea_with_gpu_renderer - no longer needed for lightspeed performance
 
 #[wasm_bindgen]
 pub fn focus_hidden_input() {
@@ -218,12 +167,12 @@ pub fn setup_render_loop(set_render_frame: WriteSignal<u32>) {
 
 // Called from input_buffer.rs when input is committed
 pub fn render_from_buffer(text: &str, cursor_pos: usize) -> Result<(), JsValue> {
-    console_log!("render_from_buffer called with text: '{}' (length: {})", text, text.len());
+    // console_log!("render_from_buffer called with text: '{}' (length: {})", text, text.len());
     // Initialize WebGPU if not already done
     let text_owned = text.to_string();
     wasm_bindgen_futures::spawn_local(async move {
         if let Err(e) = render_fast_text(&text_owned, cursor_pos).await {
-            console_log!("Fast render error: {:?}", e);
+            // console_log!("Fast render error: {:?}", e);
         }
     });
     
@@ -231,7 +180,7 @@ pub fn render_from_buffer(text: &str, cursor_pos: usize) -> Result<(), JsValue> 
 }
 
 async fn render_fast_text(text: &str, _cursor_pos: usize) -> Result<(), JsValue> {
-    console_log!("render_fast_text called with text: '{}' (length: {})", text, text.len());
+    // console_log!("render_fast_text called with text: '{}' (length: {})", text, text.len());
     
     // Get or initialize WebGPU resources
     let resources = crate::text_input::get_or_init_webgpu_resources().await?;

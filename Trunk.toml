@@ -1,0 +1,45 @@
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/"
+
+[serve]
+address = "127.0.0.1"
+port = 8080
+
+[clean]
+dist = "dist"
+cargo = true
+
+[tools]
+wasm-bindgen = "0.2"
+
+[tools.wasm-opt]
+run = true
+# Aggressive size optimization flags
+options = [
+    "-Oz",              # Optimize for size
+    "--enable-simd",    # Enable SIMD instructions
+    "--converge",       # Run optimizations until convergence
+    "--vacuum",         # Remove dead code
+    "--remove-unused-brs", # Remove unused branches
+    "--remove-unused-nonfunction-module-elements",
+    "--code-folding",   # Fold similar code
+    "--local-cse",      # Common subexpression elimination
+    "--flatten",        # Flatten control flow
+    "--merge-blocks",   # Merge basic blocks
+    "--simplify-locals", # Simplify local variables
+    "--dce",            # Dead code elimination
+    "--duplicate-function-elimination",
+    "--optimize-instructions",
+    "--precompute",     # Precompute constant expressions
+    "--remove-imports", # Remove unused imports
+    "--remove-memory",  # Remove unused memory
+    "--rereloop",       # Optimize loops
+    "--strip-debug",    # Strip debug info
+    "--strip-producers" # Strip producers section
+]
+
+[build.wasm-bindgen]
+reference-types = true
+weak-refs = true
