@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
-use web_sys::{console, HtmlCanvasElement};
+use web_sys::HtmlCanvasElement;
 
 mod gpu;
 

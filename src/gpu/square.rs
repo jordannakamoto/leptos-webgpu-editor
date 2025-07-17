@@ -47,7 +47,7 @@ pub fn draw_square(device: &GpuDevice, view: &web_sys::GpuTextureView, pipeline:
     let color_attachment = web_sys::GpuRenderPassColorAttachment::new(
         web_sys::GpuLoadOp::Clear,
         web_sys::GpuStoreOp::Store,
-        &view
+        view
     );
     color_attachment.set_clear_value(&clear_color);
     color_attachments.push(&color_attachment);
@@ -55,7 +55,7 @@ pub fn draw_square(device: &GpuDevice, view: &web_sys::GpuTextureView, pipeline:
     let render_pass_descriptor = web_sys::GpuRenderPassDescriptor::new(&color_attachments);
     let render_pass = command_encoder.begin_render_pass(&render_pass_descriptor)?;
     
-    render_pass.set_pipeline(&pipeline);
+    render_pass.set_pipeline(pipeline);
     render_pass.draw(6);
     render_pass.end();
     

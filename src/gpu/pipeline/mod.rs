@@ -19,17 +19,17 @@ impl RenderPipeline {
         let pipeline_layout = device.create_pipeline_layout(&web_sys::GpuPipelineLayoutDescriptor::new(&js_sys::Array::new()));
         
         // Vertex stage
-        let mut vertex_state = web_sys::GpuVertexState::new(&vertex_shader);
+        let vertex_state = web_sys::GpuVertexState::new(vertex_shader);
         vertex_state.set_entry_point("main");
         
         let mut pipeline_desc = web_sys::GpuRenderPipelineDescriptor::new(&pipeline_layout, &vertex_state);
 
         // Fragment stage
         let targets = js_sys::Array::new();
-        let mut color_target = web_sys::GpuColorTargetState::new(web_sys::GpuTextureFormat::Bgra8unorm);
+        let color_target = web_sys::GpuColorTargetState::new(web_sys::GpuTextureFormat::Bgra8unorm);
         targets.push(&color_target);
         
-        let mut fragment_state = web_sys::GpuFragmentState::new(&fragment_shader, &targets);
+        let fragment_state = web_sys::GpuFragmentState::new(fragment_shader, &targets);
         fragment_state.set_entry_point("main");
         pipeline_desc.fragment(&fragment_state);
         

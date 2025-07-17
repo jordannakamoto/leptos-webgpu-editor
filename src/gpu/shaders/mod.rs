@@ -25,7 +25,7 @@ fn main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32
 }
 "#;
         
-        let mut descriptor = web_sys::GpuShaderModuleDescriptor::new(shader_code);
+        let descriptor = web_sys::GpuShaderModuleDescriptor::new(shader_code);
         Ok(device.create_shader_module(&descriptor))
     }
     
@@ -37,7 +37,7 @@ fn main() -> @location(0) vec4<f32> {
 }
 "#;
         
-        let mut descriptor = web_sys::GpuShaderModuleDescriptor::new(shader_code);
+        let descriptor = web_sys::GpuShaderModuleDescriptor::new(shader_code);
         Ok(device.create_shader_module(&descriptor))
     }
     
@@ -55,7 +55,7 @@ fn main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32
 }}
 "#, shape_type, vertices.len(), 
     vertices.iter()
-        .map(|(x, y)| format!("vec2<f32>({}, {})", x, y))
+        .map(|(x, y)| format!("vec2<f32>({x}, {y})"))
         .collect::<Vec<_>>()
         .join(",\n        ")
     )

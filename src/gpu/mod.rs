@@ -11,5 +11,3 @@ pub mod shaders;
 pub mod square;
 pub mod utils;
 
-pub use context::GpuContext;
-pub use pipeline::RenderPipeline;

@@ -11,8 +11,8 @@ pub fn clear_screen(device: &GpuDevice, view: &GpuTextureView, color: [f64; 4]) 
     
     // Color attachment
     let color_attachments = js_sys::Array::new();
-    let mut color_attachment = web_sys::GpuRenderPassColorAttachment::new(web_sys::GpuLoadOp::Clear, web_sys::GpuStoreOp::Store, &view);
-    let mut clear_color = web_sys::GpuColorDict::new(color[3], color[2], color[1], color[0]);
+    let color_attachment = web_sys::GpuRenderPassColorAttachment::new(web_sys::GpuLoadOp::Clear, web_sys::GpuStoreOp::Store, view);
+    let clear_color = web_sys::GpuColorDict::new(color[3], color[2], color[1], color[0]);
     color_attachment.set_clear_value(&clear_color);
     color_attachments.push(&color_attachment);
     
